@@ -284,6 +284,7 @@ namespace EasyModbus
     /// </summary>
     public class ModbusServer
     {
+        private const int MAX_BYTES = 255;
         private bool debug = false;
         Int32 port = 502;
         ModbusProtocol receiveData;
@@ -1063,27 +1064,44 @@ namespace EasyModbus
 
             sendData.unitIdentifier = this.unitIdentifier;
             sendData.functionCode = receiveData.functionCode;
-            if ((receiveData.quantity < 1) | (receiveData.quantity > 0x007D))  //Invalid quantity
+            bool standardRegisterQuantityExceeded = false;
+
+            if (receiveData.quantity < 1)  //Invalid quantity
             {
                 sendData.errorCode = (byte)(receiveData.functionCode + 0x80);
                 sendData.exceptionCode = 3;
             }
+
+            if (receiveData.quantity > 0x007D)  //Quantity Exceeded
+            {
+                standardRegisterQuantityExceeded = true;
+            }
+
             if (((receiveData.startingAdress + 1 + receiveData.quantity) > 65535)  | (receiveData.startingAdress < 0))   //Invalid Starting adress or Starting address + quantity
             {
                 sendData.errorCode = (byte)(receiveData.functionCode + 0x80);
                 sendData.exceptionCode = 2;
             }
+
+            // this is the actual number of bytes that we will return (this can go over 255 since we're modifying the protocol here.
+            int realByteCount = receiveData.quantity * 2;
+
             if (sendData.exceptionCode == 0)
             {
-                sendData.byteCount = (byte)(2 * receiveData.quantity);
+                // Cap the response byte count to 255 since that's the maximum length a response can technically have
+                sendData.byteCount = standardRegisterQuantityExceeded ? (byte) MAX_BYTES : (byte)(realByteCount);
+
+                // Create an array of the number of registers requested
                 sendData.sendRegisterValues = new Int16[receiveData.quantity];
                 lock (lockHoldingRegisters)
                     Buffer.BlockCopy(holdingRegisters.localArray, receiveData.startingAdress * 2 + 2, sendData.sendRegisterValues, 0, receiveData.quantity * 2);
             }
-                if (sendData.exceptionCode > 0)
-                    sendData.length = 0x03;
-                else
-                    sendData.length = (ushort)(0x03 + sendData.byteCount);
+
+            if (sendData.exceptionCode > 0)
+                sendData.length = 0x03;
+            else
+                // Message length = unitId (1) + Func (1) + byteCount (1) + number of bytes. NOTE: (Message length does not include its own byte in the count)
+                sendData.length = (ushort)(0x03 + realByteCount);
             
             if (true)
             {
@@ -1091,24 +1109,29 @@ namespace EasyModbus
                 if (sendData.exceptionCode > 0)
                     data = new byte[9 + 2 * Convert.ToInt32(serialFlag)];
                 else
-                    data = new byte[9 + sendData.byteCount + 2 * Convert.ToInt32(serialFlag)];
-                Byte[] byteData = new byte[2];
-                sendData.length = (byte)(data.Length - 6);
+                    // Size of data for tcp is simply the bytes of data + 9 bytes
+
+                    // 9 = TID (2) + PID (2) + MessageLength (2) + UnitId (1) + Func (1) + NumDataBytes (1) 
+                    // Serial flag will add two more bytes to the data array size
+                    data = new byte[9 + realByteCount + 2 * Convert.ToInt32(serialFlag)];
+
+
+                Byte[] word = new byte[2];
 
                 //Send Transaction identifier
-                byteData = BitConverter.GetBytes((int)sendData.transactionIdentifier);
-                data[0] = byteData[1];
-                data[1] = byteData[0];
+                word = BitConverter.GetBytes((int)sendData.transactionIdentifier);
+                data[0] = word[1];
+                data[1] = word[0];
 
                 //Send Protocol identifier
-                byteData = BitConverter.GetBytes((int)sendData.protocolIdentifier);
-                data[2] = byteData[1];
-                data[3] = byteData[0];
+                word = BitConverter.GetBytes((int)sendData.protocolIdentifier);
+                data[2] = word[1];
+                data[3] = word[0];
 
                 //Send length
-                byteData = BitConverter.GetBytes((int)sendData.length);
-                data[4] = byteData[1];
-                data[5] = byteData[0];
+                word = BitConverter.GetBytes((int)sendData.length);
+                data[4] = word[1];
+                data[5] = word[0];
 
                 //Unit Identifier
                 data[6] = sendData.unitIdentifier;
@@ -1130,9 +1153,9 @@ namespace EasyModbus
                 if (sendData.sendRegisterValues != null)
                     for (int i = 0; i < (sendData.byteCount / 2); i++)
                     {
-                        byteData = BitConverter.GetBytes((Int16)sendData.sendRegisterValues[i]);
-                        data[9 + i * 2] = byteData[1];
-                        data[10 + i * 2] = byteData[0];
+                        word = BitConverter.GetBytes((Int16)sendData.sendRegisterValues[i]);
+                        data[9 + i * 2] = word[1];
+                        data[10 + i * 2] = word[0];
                     }
                 try
                 {
@@ -1142,9 +1165,9 @@ namespace EasyModbus
                             throw new EasyModbus.Exceptions.SerialPortNotOpenedException("serial port not opened");
                         //Create CRC
                         sendData.crc = ModbusClient.calculateCRC(data, Convert.ToUInt16(data.Length - 8), 6);
-                        byteData = BitConverter.GetBytes((int)sendData.crc);
-                        data[data.Length - 2] = byteData[0];
-                        data[data.Length - 1] = byteData[1];
+                        word = BitConverter.GetBytes((int)sendData.crc);
+                        data[data.Length - 2] = word[0];
+                        data[data.Length - 1] = word[1];
                         serialport.Write(data, 6, data.Length - 6);
                         if (debug)
                         {
@@ -1162,6 +1185,7 @@ namespace EasyModbus
                     }
                     else
                     {
+                        // Example: Number of Registers requested = 133. Bytes = Registers * 2 = 266. 266 + 9 header bytes = 275 total bytes
                         stream.Write(data, 0, data.Length);
                         if (debug) StoreLogData.Instance.Store("Send Data: " + BitConverter.ToString(data), System.DateTime.Now);
                     }
