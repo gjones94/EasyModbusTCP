@@ -1072,7 +1072,7 @@ namespace EasyModbus
                 sendData.exceptionCode = 3;
             }
 
-            if (receiveData.quantity > 0x007D)  //Quantity Exceeded
+            if (receiveData.quantity > 0x007F)  //Quantity Exceeded, need to cap. 127 registers is the most that can be accepted to get 254 bytes for the data length field. Anything else will require 255 even though data length will actually exceed this
             {
                 standardRegisterQuantityExceeded = true;
             }
