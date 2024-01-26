@@ -1125,8 +1125,8 @@ namespace EasyModbus
 
                 //Send Protocol identifier
                 word = BitConverter.GetBytes((int)sendData.protocolIdentifier);
-                data[2] = word[1];
-                data[3] = word[0];
+                data[2] = 0;
+                data[3] = 0;
 
                 //Send length
                 word = BitConverter.GetBytes((int)sendData.length);
@@ -1151,7 +1151,8 @@ namespace EasyModbus
    
 
                 if (sendData.sendRegisterValues != null)
-                    for (int i = 0; i < (sendData.byteCount / 2); i++)
+                    // Loop through actual quantity of words requsted instead of max 127
+                    for (int i = 0; i < (receiveData.quantity); i++)
                     {
                         word = BitConverter.GetBytes((Int16)sendData.sendRegisterValues[i]);
                         data[9 + i * 2] = word[1];
